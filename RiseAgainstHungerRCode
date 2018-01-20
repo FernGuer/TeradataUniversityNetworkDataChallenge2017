@@ -1,0 +1,551 @@
+library(caret)
+library(dplyr)
+library(pls)
+memory.limit(4000)
+
+#data download and competition information: TeradataUniversityNetwork.com/Student-Competitions/2017/Data-Challenge
+
+########## Organize data definitions file for more efficient use -----
+
+Defs = read.csv("RiseAgainstHunger_Salesforce_ Data_ Dictionary(Original,csv).csv", header = TRUE,
+                       stringsAsFactors = FALSE, na.strings = c("","NA"))
+Defs = Defs[1:910,1:5] #remove superfluous data
+
+#create vectors of every variable and categories into which each variable's factors will be sorted
+Vars = c("FIELD","DESCRIPTION","DATA.TYPE","API_NAME","OBJECT")
+Text = c("URL","Link","Text","Comment","Categorical","ContactDetails","Date/Time","Location",
+         "Numeric","Record Type")
+
+#standardize each variable's data type into typical statistical interpretations
+SubDat = c("(\\s$|^\\\t|\\\t$)","(^T[Ee][Xx][Tt]\\s?(.*)|(Long|Rich) Text Area[(].....[)])",
+           "^(N|C|P)(u|e)(m|r)(b|r|c)e(r|n)(cy|t)?(\\s?[(].+,\\s?.[)])?","Date(/Time)?",
+           "Formula\\s?[(]((C|c)urrency|(N|n)umber|Percent)[)]","^(Formula$|Formula [(]Checkbox[)])",
+           "Checkbox","^Formula\\s?[(]Text[)]","^Picklist\\s[(].*[)]","Picklist","^URL\\s?[(].*[)]",
+           "^.*?\\s?.*?\\s?[(]?(Geolocation|Region|Zip Code|Country|Possible Location)[)]?",
+           "^Auto Number\\s?([(].*[)])?","^Lookup\\s?(Relationship)?\\s?([(].+\\s?.*?.*?[)])",
+           "^Master-Detail\\s?([(].+\\s?.*?[)])","(Email|Name|Phone)",
+           "Roll-Up Summary [(].+\\s.+\\s?.*?\\s?.*?[)]")
+
+#define the standard definitions to which data definitions will be converted
+SubRep = c("","Text","Numeric","Date/Time","Numeric","Checkbox","Categorical","Text",
+           "Categorical","Categorical","URL","Location","Numeric","Text","Text","ContactDetails","Numeric")
+
+#standardize
+for (i in seq_along(SubDat)) {
+    Defs[,Vars[3]] = gsub(SubDat[i], SubRep[i], Defs[,Vars[3]])
+  }
+
+#name data types for variables that are missing data types
+Defs[which(Defs[,Vars[4]] == "Parentid" |
+                    Defs[,Vars[4]] == "stayclassy__sf_designation_id__c" |
+                    Defs[,Vars[4]] == "stayclassy__sf_event_id__c" |
+                    Defs[,Vars[4]] == "stayclassy__venue_name__c" |
+                    Defs[,Vars[4]] == "stayclassy__Fundraiser_Alias__c" |
+                    Defs[,Vars[4]] == "stayclassy__address1__c" |
+                    Defs[,Vars[4]] == "stayclassy__address2__c" |
+                    Defs[,Vars[4]] == "stayclassy__sc_event_id__c" |
+                    Defs[,Vars[4]] == "stayclassy__sf_contact_id__c" |
+                    Defs[,Vars[4]] == "Volunteer_Interests__c"),Vars[3]] = Text[3]
+
+Defs[which(Defs[,Vars[4]] == "Account_Sub_Type__c" |
+                    Defs[,Vars[4]] == "stayclassy__Classy_Campaign_Type__c"),Vars[3]] = Text[5]
+
+Defs[which(Defs[,Vars[4]] == "Volunteer_End_Date__c" |
+                    Defs[,Vars[4]] == "Volunteer_Start_Date__c"),Vars[3]] = Text[7]
+
+Defs[which(Defs[,Vars[4]] == "stayclassy__state__c" |
+                    Defs[,Vars[4]] == "stayclassy__zip__c" |
+                    Defs[,Vars[4]] == "stayclassy__city__c" |
+                    Defs[,Vars[4]] == "stayclassy__country__c"),Vars[3]] = Text[8]
+
+Defs[which(Defs[,Vars[4]] == "stayclassy__total_raised__c" |
+                    Defs[,Vars[4]] == "stayclassy__sc_total_donated__c" |
+                    Defs[,Vars[4]] == "stayclassy__sc_total_fundraising__c" |
+                    Defs[,Vars[4]] == "Amount" |
+                    Defs[,Vars[4]] == "rC_Giving__Giving_Amount" |
+                    Defs[,Vars[4]] == "rC_Giving__Expected_Giving_Amount"),Vars[3]] = Text[9]
+
+Defs[which(Defs[,Vars[4]] == "Account_Sub_Type__c"),Vars[5]] = "ACCOUNT"
+
+#organize the data definitions by data type, consolidating free text indicators under rubric of text
+URLFldVars = as.numeric(rownames(Defs)[grep(Text[1], Defs[,Vars[1]])])
+URLDatVars = as.numeric(rownames(Defs)[grep(Text[1], Defs[,Vars[3]])])
+URLNamVars = as.numeric(rownames(Defs)[grep(Text[1], Defs[,Vars[4]])])
+URLObjVars = as.numeric(rownames(Defs)[grep(Text[1], Defs[,Vars[5]])])
+
+LinkFldVars = as.numeric(rownames(Defs)[grep(Text[2], Defs[,Vars[1]])])
+LinkNamVars = as.numeric(rownames(Defs)[grep(Text[2], Defs[,Vars[4]])])
+LinkObjVars = as.numeric(rownames(Defs)[grep(Text[2], Defs[,Vars[5]])])
+
+URLLinkVars = unique(c(URLFldVars, URLDatVars, URLNamVars, URLObjVars,
+                   LinkFldVars, LinkNamVars, LinkObjVars))
+URLDefs = Defs[URLLinkVars,c(Vars[3],Vars[4])]
+
+TextVars = as.numeric(rownames(Defs)[grep(Text[3], Defs[,Vars[3]])])
+CommFldVars = as.numeric(rownames(Defs)[grep(Text[4], Defs[,Vars[1]])])
+CommNamVars = as.numeric(rownames(Defs)[grep(Text[4], Defs[,Vars[4]])])
+
+TextCommVars = unique(c(TextVars, CommFldVars, CommNamVars))
+TextDefs = Defs[TextCommVars,c(Vars[3],Vars[4])]
+
+CategVars = as.numeric(rownames(Defs)[grep(Text[5], Defs[,Vars[3]])])
+CategDefs = Defs[CategVars,c(Vars[3],Vars[4])]
+
+ContDetsVars = as.numeric(rownames(Defs)[grep(Text[6], Defs[,Vars[3]])])
+ContDetsDefs = Defs[ContDetsVars,c(Vars[3],Vars[4])]
+
+DateTimeVars = as.numeric(rownames(Defs)[grep(Text[7], Defs[,Vars[3]])])
+DateTimeDefs = Defs[DateTimeVars,c(Vars[3],Vars[4])]
+
+LocVars = as.numeric(rownames(Defs)[grep(Text[8], Defs[,Vars[3]])])
+LocDefs = Defs[LocVars,c(Vars[3],Vars[4])]
+
+NumVars = as.numeric(rownames(Defs)[grep(Text[9], Defs[,Vars[3]])])
+NumDefs = Defs[NumVars,c(Vars[3],Vars[4])]
+
+RecTypeVars = as.numeric(rownames(Defs)[grep(Text[10], Defs[,Vars[3]])])
+RecTypeDefs = Defs[RecTypeVars,c(Vars[3],Vars[4])]
+
+DefsToKeep = unique(c(URLLinkVars,TextCommVars,CategVars,NumVars,ContDetsVars,
+                               DateTimeVars,LocVars,RecTypeVars))
+
+########## End of data definitions clean up -----
+
+########## Begin data set dimensionality reduction -----
+
+#identify names of the first variables to remove from data set
+DefsToRemove = Defs[-DefsToKeep,Vars[4]]
+
+#systematically remove variables by subset
+#Cagetoricals, contactdets, datetime, loc, numerics, text to remove as per definition file instructions
+
+VarsToRem = c("Grant_Recipient__c","rC_Bios__Archive_Flag__c","Possible_Duplicate__c",
+              "Auto_Account_Number__c","HC_ID__c","HC_OLD_Parent_ID__c","HC_Delta_Action__c","HC_Old_AID__c",
+              "HC Old NPESS HHID__c","stayclassy__Test_Required__c","Possible_Duplicate__c",
+              "Legacy_Created_Date__c","HC_LoadSeq__c", "HC_DeltaAction__c", "Audit__c",
+              "Old_Projected_Amount__c","TotalOpportunityQuantity")
+
+#remove the variables from the data definitions
+#these contain one or more matches
+CategDefs = CategDefs[-which(CategDefs[,Vars[4]] %in% VarsToRem),]
+DateTimeDefs = DateTimeDefs[-which(DateTimeDefs[,Vars[4]] %in% VarsToRem),]
+NumDefs = NumDefs[-which(NumDefs[,Vars[4]] %in% VarsToRem),]
+TextDefs = TextDefs[-which(TextDefs[,Vars[4]] %in% VarsToRem),]
+
+#no matches
+#ContDetsDefs = ContDetsDefs[-which(ContDetsDefs[,Vars[4]] %in% VarsToRem),]
+#LocDefs = LocDefs[-which(LocDefs[,Vars[4]] %in% VarsToRem),]
+#URLDefs = URLDefs[-which(URLDefs[,Vars[4]] %in% VarsToRem),]
+
+#get the data
+Accounts = read.csv("Rise Against Hunger - Accounts.csv", header = TRUE, stringsAsFactors = FALSE,
+                    na.strings = c("","NA"))
+Accounts = Accounts[,-which(names(Accounts) %in% VarsToRem)] #reduce count 258 to 251
+
+#Id (Accounts) and AccountId (Contacts) allows the merging of the data sets
+colnames(Accounts)[which(names(Accounts) == "Id")] = "AccountId"
+
+Contacts = read.csv("Rise Against Hunger - Contacts.csv", header = TRUE, stringsAsFactors = FALSE,
+                    na.strings = c("","NA"))
+Contacts = Contacts[,-which(names(Contacts) %in% VarsToRem)] #reduce count 188 to 183
+
+Opportunities = read.csv("Rise Against Hunger - Opportunities.csv", header = TRUE, stringsAsFactors = FALSE,
+                         na.strings = c("","NA"))
+Opportunities = Opportunities[,-which(names(Opportunities) %in% VarsToRem)] #reduce count 356 to 349
+
+########## Data Cleansing -----
+
+#identify the classes the data set contains, i.e. character, integer, logical, numeric
+#table(sapply(Contacts, class))
+#table(sapply(Accounts, class))
+#table(sapply(Opportunities, class))
+
+#perform dimensionality reduction
+DimensionalityReduction = function(Dataset) {
+
+  #remove all variables consisting only of NAs
+  DataNAs = c()
+  for (i in 1:ncol(Dataset)) {
+    DataNAs[i] = length(Dataset[which(is.na(Dataset[,i])),i])
+  }
+  DataTotal = nrow(Dataset)
+  DataToRem = which(DataNAs == DataTotal)
+
+  if (length(DataToRem) > 0)  { Dataset = Dataset[,-DataToRem]
+  } else {Dataset = Dataset}
+
+  #remove non-character and non-boolean variables with only zero counts or totals
+  IDZeroSums = function(Dataset){
+
+    VarNames = VarSum = c()
+    VarMat = list()
+    for (i in 1:ncol(Dataset)) {
+      if (class(Dataset[,i]) != "character" & class(Dataset[,i]) != "logical")
+      { VarNames[i] = colnames(Dataset)[i]
+          VarSum[i] = sum(as.numeric(Dataset[,i]), na.rm = TRUE)
+        VarMat[[i]] = c(VarNames[i], VarSum[i])
+      }
+    }
+
+    VarsToRem = c()
+    for (i in 1:length(VarMat)) {
+      if (!is.null(VarMat[[i]]))
+      {
+        if (VarMat[[i]][2] == 0) { VarsToRem[i] = VarMat[[i]][1]
+        } else {VarsToRem[i] = NA}
+      }
+    }
+    VarsToRem = VarsToRem[!is.na(VarsToRem)]
+
+    if (length(VarsToRem) > 0) { Dataset = Dataset[,-which(colnames(Dataset) %in% VarsToRem)]
+    } else {Dataset = Dataset}
+
+    return(Dataset)
+  }
+  Dataset = IDZeroSums(Dataset)
+
+  #remove unary boolean variables (don't provide differentiating information)
+  #remove variables that contain essentially all NAs
+  BooleanReduxNACounts = function(Dataset) {
+
+    Boolean = BoolToRem = c()
+    for (i in 1:ncol(Dataset)) {
+      if (class(Dataset[,i]) == "logical") { Boolean[i] = table(Dataset[,i])[1]
+      } else {Boolean[i] = 0}
+      if (Boolean[i] == nrow(Dataset)) { BoolToRem[i] = colnames(Dataset)[i]}
+    }
+    BoolToRem = BoolToRem[!is.na(BoolToRem)]
+
+    if (length(BoolToRem) > 0) { Dataset = Dataset[,-which(colnames(Dataset) %in% BoolToRem)]
+    } else {Dataset = Dataset}
+
+    NACounts = c()
+    for (i in 1:ncol(Dataset)) {NACounts[i] = length(Dataset[which(is.na(Dataset[,i]) == TRUE),i])}
+
+    LowCounts = which(NACounts > floor(nrow(Dataset) - .000035*nrow(Dataset)))
+    Dataset = Dataset[,-LowCounts]
+
+    return(Dataset)
+  }
+  Dataset = BooleanReduxNACounts(Dataset)
+
+  #fill NAs for numerics and integers with 0s to facilitate modeling
+  #fix location variables that are poorly structured
+  FillInFixVars = function(Dataset) {
+
+    for (i in 1:ncol(Dataset)) {
+      if (class(Dataset[,i]) == "numeric" | class(Dataset[,i]) == "integer") {
+        Dataset[is.na(Dataset[,i]),i] = 0
+      }
+      if (class(Dataset[,i]) == "character") {
+        Dataset[is.na(Dataset[,i]),i] = "unknown" }
+    }
+
+    return(Dataset)
+  }
+  Dataset = FillInFixVars(Dataset)
+
+  return(Dataset)
+}
+
+#parameter: Salesforce data (Accounts, Contacts, Opportunities) from RAH
+Accounts = DimensionalityReduction(Accounts)
+Contacts = DimensionalityReduction(Contacts)
+Opportunities = DimensionalityReduction(Opportunities)
+
+########## End of preliminary data cleaning -----
+#total variables reduced from 802 to ~482 w/ only minor loss of data integrity
+
+########## Final data cleaning,'hands on' dimensionality reduction -----
+
+FirstLookData = function(Dataset) {
+
+  DataTbl = list()
+  for (i in 1:ncol(Dataset)) {
+    DataTbl[[i]] = as.matrix(table(Dataset[,i]))
+  }
+  return(DataTbl)
+}
+
+AcctDataTbls = FirstLookData(Accounts)
+ContDataTbls = FirstLookData(Contacts)
+OppoDataTbls = FirstLookData(Opportunities)
+
+#perform some 'hands on' data cleaning; id unnecessary variables
+#View(AcctDataTbls[[151]])
+#names(Accounts)
+
+AcctCityCtry = c("BillingCity","ShippingCity","BillingCountry","ShippingCountry",
+             "BillingState","ShippingState") #remove nums, punct, spaces, case
+
+for (i in seq_along(AcctCityCtry)) {
+  Accounts[,AcctCityCtry[i]] = tolower(Accounts[,AcctCityCtry[i]])
+  Accounts[,AcctCityCtry[i]] = gsub("[[:punct:]]","", Accounts[,AcctCityCtry[i]])
+  Accounts[,AcctCityCtry[i]] = gsub("^(\\s|[0-9])+\\s+","", Accounts[,AcctCityCtry[i]])
+  Accounts[,AcctCityCtry[i]] = gsub("^\\s|\\s$","", Accounts[,AcctCityCtry[i]])
+}
+
+USAMatBill = agrep("united states", Accounts[,AcctCityCtry[3]], ignore.case = FALSE, max.distance = 0.3)
+USAMatShip = agrep("united states", Accounts[,AcctCityCtry[4]], ignore.case = FALSE, max.distance = 0.3)
+Accounts[USAMatBill,AcctCityCtry[3]] = "usa"
+Accounts[USAMatShip,AcctCityCtry[4]] = "usa"
+
+#variables reviewed and determined to be unnecessary/inappropriate for non-time series data
+AcctVarsRem = c("AccountNumber","Account_Number__c","Check_Parent_Account__c","CreatedById",
+                  "CreatedDate","Create_Development_Opportunity__c","External_ID__c",
+                  "First_Inkind_Hard_Credit_Date__c","LastModifiedById","LastModifiedDate","LastReferencedDate",
+                  "LastViewedDate","Last_Inkind_Hard_Credit_Date__c","Last_Inkind_Hard_Credit_Amount__c",
+                  "Other_GIK_Needs_Demand__c","OwnerId","ParentId","Payment_Terms__c",
+                  "PhotoUrl","Primary_Account_Contact__c","Quarterly_and_Shipment_Reporting__c",
+                  "Quarterly_Reporting_Only__c","rC_Bios__Acquired_Date__c","rC_Bios__Acquired_Source__c",
+                  "rC_Bios__Age_for_Preference_Rule_Engine__c","rC_Bios__External_ID__c",
+                  "rC_Bios__Preferred_Shipping_Address__c","rC_Giving__First_Recognition_Credit_Date__c",
+                  "rC_Giving__First_Soft_Credit_Date__c","rC_Giving__Largest_Recognition_Credit_Date__c",
+                  "rC_Giving__Largest_Soft_Credit_Date__c","rC_Giving__Rollup_Affiliations_Status__c",
+                  "rC_Giving__Rollup_Affiliations__c","rC_Giving__Rollup_Hard_Credits_Status__c",
+                  "rC_Giving__Rollup_Hard_Credits__c","rC_Giving__Rollup_Recognition_Credits_Status__c",
+                  "rC_Giving__Rollup_Recognition_Credits__c","rC_Giving__Rollup_Soft_Credits_Status__c",
+                  "rC_Giving__Rollup_Soft_Credits__c","rC_Giving__Rollup_Summaries_Status__c",
+                  "rC_Giving__Rollup_Summaries__c","rC_Giving__Update_Gift_Membership_Summaries__c",
+                  "rC_Giving__Update_Lifetime_Summaries__c", "rC_Giving__Update_Summaries__c",
+                  "RecordTypeId","Shipping_Logistics__c","SystemModstamp","Zip_Code_A__c")
+
+Accounts = Accounts[,-which(names(Accounts) %in% AcctVarsRem)]
+
+#View(ContDataTbls[[1]])
+#names(Contacts)
+
+ContCityCtry = c("MailingCity","MailingCountry","MailingState") #remove nums, punct, spaces, case
+
+for (i in seq_along(ContCityCtry)) {
+  Contacts[,ContCityCtry[i]] = tolower(Contacts[,ContCityCtry[i]])
+  Contacts[,ContCityCtry[i]] = gsub("[[:punct:]]","", Contacts[,ContCityCtry[i]])
+  Contacts[,ContCityCtry[i]] = gsub("^(\\s|[0-9])+\\s+","", Contacts[,ContCityCtry[i]])
+  Contacts[,ContCityCtry[i]] = gsub("^\\s|\\s$","", Contacts[,ContCityCtry[i]])
+}
+
+USAMailCtry = agrep("united states", Contacts[,ContCityCtry[2]], ignore.case = FALSE, max.distance = 0.3)
+Contacts[USAMailCtry,ContCityCtry[2]] = "usa"
+
+#variables reviewed and determined to be unnecessary
+ContToRem = c("Assigned_To__c","Auto_Contact_Number__c","Champion_Advocate_Description__c",
+              "Champion_Formula__c","Comment__c","Date_Removed__c","CreatedById","CreatedDate",
+              "Description","Donor_History_Last_Updated__c","EmailBouncedReason","End_Date__c",
+              "et4ae5__Mobile_Country_Code__c","Exported_For_Wealth_Engine__c","External_ID__c",
+              "First_Hard_Credit_Date__c","HC_OLD_AID__c","HC_OLD_NPESS_HHID__c","Household_Account__c",
+              "Id","LastModifiedById","LastModifiedDate","LastReferencedDate","LastViewedDate",
+              "MG_Tier__c","Organization_Account__c","OwnerId","Program__c",
+              "rC_Giving__First_Recognition_Credit_Date__c","rC_Giving__First_Soft_Credit_Date__c",
+              "rC_Giving__Largest_Hard_Credit_Date__c","rC_Giving__Largest_Recognition_Credit_Date__c",
+              "rC_Giving__Largest_Soft_Credit_Date__c","rC_Giving__Last_Recognition_Credit_Date__c",
+              "rC_Giving__Rollup_Hard_Credits_Status__c","rC_Giving__Rollup_Recognition_Credits_Status__c",
+              "rC_Giving__Rollup_Soft_Credits_Status__c","RecordTypeId","ReportsToId","REVIEW__c",
+              "Start_Date__c","stayclassy__sc_member_id__c","SystemModstamp")
+
+Contacts = Contacts[,-which(names(Contacts) %in% ContToRem)]
+
+#View(OppoDataTbls[[205]])
+#names(Opportunities)
+
+OppoToRem = c("Ack_Action__c","Application_Complete__c","Application_Due_Date__c","Auto_Giving_Number__c",
+              "Batch_ID__c","Company_Credit_Card_Used__c","CreatedById","CreatedDate",
+              "Date_Decision_Will_Be_Made__c","Date_Funding_Will_Be_Provided_By__c",
+              "Days_Til_Application_Due_Date__c","Dedication_Ltr_Sent__c","Description",
+              "Donation_Description__c","Donor_Report_Complete__c","Donor_Requires_Reporting_From_SHN__c",
+              "Donor_Requires_Report_By__c","Expected_Receipt_Date__c","External_ID__c",
+              "FiscalQuarter","FiscalYear","Grantwriter__c","HasOpenActivity","HasOpportunityLineItem",
+              "HasOverdueTask","Id","Include_in_4050__c","LastActivityDate","LastModifiedById",
+              "LastModifiedDate","LastReferencedDate","LastViewedDate","Matching_Close_Date__c",
+              "OwnerId","Owner_ID_Hidden__c","Payment_Processor__c","Pricebook2Id",
+              "rC_Giving__Account_Update_Summaries_Age__c","rC_Giving__Acknowledged_Date__c",
+              "rC_Giving__Acknowledged__c","rC_Giving__Affiliation__c","rC_Giving__Allocation_Model__c",
+              "rC_Giving__Anniversary_Date__c","rC_Giving__Anniversary_Renewal_Date__c",
+              "rC_Giving__Best_Case_Bar__c","rC_Giving__Campaign_Rollup_Giving_Age__c",
+              "rC_Giving__Campaign_Source_Code__c","rC_Giving__Check_Date__c",
+              "rC_Giving__Check_Number__c","rC_Giving__Closed_Bar__c","rC_Giving__Closed_Ratio__c",
+              "rC_Giving__Close_Date_Time__c","rC_Giving__Comments__c",
+              "rC_Giving__Commit_Bar__c","rC_Giving__Current_Giving_Bar__c",
+              "rC_Giving__Effective_Giving_Type_Date__c","rC_Giving__Expected_Giving_Bar__c",
+              "rC_Giving__First_Closed_Payment_Date__c","rC_Giving__First_Payment_Date__c",
+              "rC_Giving__GAU__c","rC_Giving__Giving_End_Date__c","rC_Giving__Giving_Type_Engine__c",
+              "rC_Giving__Giving_Years__c","rC_Giving__Is_Completed__c",
+              "rC_Giving__Is_Giving_Transaction__c","rC_Giving__Is_Giving__c","rC_Giving__Is_Sustainer__c",
+              "rC_Giving__Last_Giving_Amount_Adjustment_Date__c","rC_Giving__Last_Giving_Amount_Adjustment__c",
+              "rC_Giving__Parent__c","rC_Giving__Payment_Method_Selected__c",
+              "rC_Giving__Payment_Reference_Number__c","rC_Giving__Payment_Transaction_ID__c",
+              "rC_Giving__Rollup_Transactions__c","rC_Giving__Send_to_GL__c",
+              "rC_Giving__Sorting_Number__c","rC_Giving__Source_Code__c",
+              "rC_Giving__Tribute_Effective_Date__c","rC_Giving__Update_Transactions__c",
+              "rC_Giving__Valuation_Date__c","Receipt_Complete__c","RecordTypeId","Ref_Source_C__c",
+              "Reporting_Requirements__c","Salesforce_ID__c","Set_Soft_Credits__c",
+              "stayclassy__Discount_Code__c","stayclassy__gateway_name__c",
+              "stayclassy__gateway_transaction_id__c","stayclassy__order_date__c",
+              "stayclassy__Organization_ID__c","stayclassy__refund_date__c",
+              "stayclassy__sc_order_id__c","stayclassy__sf_contact_id__c",
+              "stayclassy__sf_designation_id__c","stayclassy__sf_recurring_id__c",
+              "SystemModstamp","Unique_Transaction_ID__c","Upcoming_Grant_Dates__c")
+
+Opportunities = Opportunities[,-which(names(Opportunities) %in% OppoToRem)]
+
+########## Merge data sets, performed EDA, begin modeling using PLSR -----
+
+#Opportunities is time series data organized by quarterly activity for each accountId, exclude for now
+
+AcctConts = merge(Accounts, Contacts, by = "AccountId", all = TRUE, sort = TRUE)
+
+#fix NAs in merged data set
+for (i in 1:ncol(AcctConts)) {
+  if (class(AcctConts[,i]) == "numeric" | class(AcctConts[,i]) == "integer") {
+    AcctConts[is.na(AcctConts[,i]),i] = 0
+  }
+  if (class(AcctConts[,i]) == "character" | class(AcctConts[,i]) == "logical") {
+    AcctConts[is.na(AcctConts[,i]),i] = "unknown" }
+}
+
+#unique(AcctConts[,"AccountId"]) total uniques 233274
+
+FindUniques = paste(AcctConts[,1],AcctConts[,2],AcctConts[,3],
+             AcctConts[,8],AcctConts[,9],AcctConts[,10],AcctConts[,11],
+             AcctConts[,12],AcctConts[,13],AcctConts[,19],AcctConts[,20],
+             AcctConts[,46],AcctConts[,52],AcctConts[,82],AcctConts[,83],
+             AcctConts[,84],AcctConts[,85],AcctConts[,86],
+             AcctConts[,87],AcctConts[,89],AcctConts[,89],
+             AcctConts[,93],sep = "")
+
+Dups = duplicated(FindUniques)
+AcctConts = AcctConts[-which(Dups == TRUE),]
+
+########## PLS Regression -----
+
+options(scipen = 9999999, "digits" = 2) #to facilitate legibility of small coefficients
+
+#find the broadest measures of giving for each account, use as target variables
+TargetVars = c("Actual_Meals_Shipped_Lifetime__c","LIfetime_Inkind_Hard_Credit_Amount__c",
+    "Lifetime_Inkind_Hard_Credit_Count__c","Parent_Account_Events__c","Parent_Account_Meals__c",
+    "rC_Giving__Lifetime_Recognition_Credit_Amount__c.x","rC_Giving__Lifetime_Recognition_Credit_Count__c.x",
+    "rC_Giving__Lifetime_Soft_Credit_Amount__c.x","rC_Giving__Lifetime_Soft_Credit_Count__c.x",
+    "Total_Events__c","Total_Giving__c","Total_Meals__c","rC_Giving__Lifetime_Hard_Credit_Amount__c.y",
+    "rC_Giving__Lifetime_Hard_Credit_Count__c.y","rC_Giving__Lifetime_Recognition_Credit_Amount__c.y",
+    "rC_Giving__Lifetime_Recognition_Credit_Count__c.y","rC_Giving__Lifetime_Soft_Credit_Amount__c.y",
+    "rC_Giving__Lifetime_Soft_Credit_Count__c.y")
+
+#find communication preference variables (indicate desired level of engagement with RAH)
+EngageVars = c("AD_Partner_Status__c","Annual_Acknowledgements__c","Annual_Report_Subscriber__c.x",
+               "A_R_Problem__c","Exclude_from_Prospecting__c","LastActivityDate.x","Last_Event_Date__c",
+               "Lead_Partner__c","Major_Donor__c.x","Total_Events__c",
+               "Advisory_Board_BoD__c","Advocate__c","Annual_Report_Subscriber__c.y","Champion__c",
+               "DoNotCall","Do_Not_Mail__c","EmailBouncedDate","HasOptedOutOfEmail","HasOptedOutOfFax",
+               "Inactive_Owner__c","IsEmailBounced","Major_Donor__c.y","MP_Event_Host__c",
+               "MP_Volunteer__c","Prefers_Informal__c","rC_Bios__Active__c.y",
+               "rC_Bios__Assistant_Do_Not_Call__c","rC_Bios__Assistant_Email_Opt_Out__c",
+               "rC_Bios__Deceased__c","rC_Bios__Home_Do_Not_Call__c","rC_Bios__Home_Email_Opt_Out__c",
+               "rC_Bios__Mobile_Do_Not_Call__c","rC_Bios__Other_Do_Not_Call__c",
+               "rC_Bios__Other_Email_Opt_Out__c","rC_Bios__Work_Do_Not_Call__c",
+               "rC_Bios__Work_Email_Opt_Out__c","Reason_Removed__c","stayclassy__opt_in__c",
+               "Volunteer_Interests__c","Volunteer_to_Donor_Rating__c")
+
+#sample from the target variable population with values > 0, encode engagement vars
+#remove unary variables from the sample, bootstrap if count is < 1000
+DatasetBuild = function(Dataset,TargetVarsI,EngVars) {
+
+  Dataset = Dataset[which(Dataset[,TargetVarsI] > 0),]
+  EngVars = sapply(Dataset[,EngVars], as.factor)
+  Subset = data.frame(Dataset[,TargetVarsI],EngVars)
+  colnames(Subset)[1] = TargetVarsI
+  IdUnaryVars = c()
+  for (i in 1:ncol(Subset)) {IdUnaryVars[i] = nrow(table(Subset[,i]))}
+  if (1 %in% IdUnaryVars) {Subset = Subset[,-which(IdUnaryVars == 1)]}
+
+  if (nrow(Subset) < 1000) {Train = sample_n(Subset, 1000, replace = TRUE, weight = NULL)
+  } else {Train = Subset}
+
+  return(Train)
+}
+
+########## PLS regression on each target variable using preference variables as predictors -----
+
+#if dataset was not sampled previously, sample 7k observations (or 70%) for testing, 3k (or 30%) for validation
+#note: predictor variables were removed if unary for the target variable subset (e.g.unknown,T,F)
+#Check which variables were removed by comparing colnames(TargetVarsX[[i]]) with EngageVars vector of predictors
+#PLS principal components set at 10 if predictor count is greater than 10, k - 1 if less than 10
+
+PrefPLSR = TargetVarsX = TargetVarsTest = TargetVarsValidate = Pred = Comp = list()
+for (i in seq_along(TargetVars)) {
+
+  TargetVarsX[[i]] = DatasetBuild(AcctConts,TargetVars[i],EngageVars)
+
+  if (nrow(TargetVarsX[[i]]) > 10000) {
+    TargetVarsTest[[i]] = sample_n(TargetVarsX[[i]],7000, replace = TRUE, weight = NULL)
+    TargetVarsValidate[[i]] = sample_n(TargetVarsX[[i]],3000, replace = TRUE, weight = NULL)
+  } else {
+    TargetVarsTest[[i]] = TargetVarsX[[i]][1:(nrow(TargetVarsX[[i]])*.7),]
+    TargetVarsValidate[[i]] = TargetVarsX[[i]][(nrow(TargetVarsTest[[i]]) + 1):nrow(TargetVarsX[[i]]),]}
+
+  PrefPLSR[[i]] = plsr(TargetVarsTest[[i]][,1]~., ncomp = ifelse(ncol(TargetVarsTest[[i]]) < 11,
+                                                                 ncol(TargetVarsTest[[i]]) - 1,10),
+                      data = TargetVarsTest[[i]][,2:ncol(TargetVarsTest[[i]])], validation = "LOO", scale = FALSE)
+
+  Pred[[i]] = predict(PrefPLSR[[i]], ncomp = ifelse(ncol(TargetVarsTest[[i]]) < 11,
+                                                    ncol(TargetVarsTest[[i]]) - 1,10)
+                      , newdata = TargetVarsValidate[[i]])
+
+  Comp[[i]] = cbind.data.frame( "Fitted" = Pred[[i]], "Actual" = TargetVarsValidate[[i]][,1],
+                                "Diff" = (Pred[[i]] - TargetVarsValidate[[i]][,1]))
+}
+
+#summary(PrefPLSR[[1]]) #"Actual_Meals_Shipped_Lifetime__c"
+#Data: 	X dimension: 700 90
+#Y dimension: 700 1
+#Fit method: kernelpls
+#Number of components considered: 10
+
+#VALIDATION: RMSEP
+#Cross-validated using 700 leave-one-out segments.
+#(Intercept)  1 comps  2 comps  3 comps  4 comps  5 comps  6 comps  7 comps  8 comps  9 comps  10 comps
+#CV         4479199  4310282  3710815  3101534  2033148  1650868  1425597  1345312  1310398  1290115   1268202
+#adjCV      4479199  4310276  3710788  3101467  2032950  1650727  1425538  1345259  1310367  1290106   1268162
+
+#TRAINING: % variance explained
+#                           1 comps  2 comps  3 comps  4 comps  5 comps  6 comps  7 comps  8 comps  9 comps  10 comps
+#X                          62.401    71.09    74.92    77.12    80.55    82.87    84.82    85.80    86.91     87.61
+#TargetVarsTest[[i]][, 1]    7.741    32.97    54.83    81.09    87.35    90.37    91.41    91.83    92.09     92.38
+
+#plot(RMSEP(PrefPLSR[[1]]))
+#View(Comp[[1]])
+
+#identify the beta coefficients for each predictor of each target variable
+Importance = Variables = Review = list()
+for (i in seq_along(PrefPLSR)) {
+  Importance[[i]] = as.matrix(varImp(PrefPLSR[[i]]))
+  Variables[[i]] = rownames(Importance[[i]])
+  Importance[[i]] = as.data.frame(Importance[[i]])
+  Review[[i]] = as.data.frame(cbind(Importance[[i]][,1], Variables[[i]]))
+  Review[[i]][,1] = as.numeric(as.character(Review[[i]][,1]))
+  Review[[i]] = Review[[i]][order(-Review[[i]][,1]),]
+}
+
+#identify the top 20 beta coefficients for each target variable
+TopVars = data.frame(V1 = 0,V2 = "TopVars")
+for (i in seq_along(Review)) {
+  TopVars = rbind(TopVars,Review[[i]][1:20,])
+}
+TopVars[,2] = as.character(TopVars[,2])
+#View(as.matrix(table(TopVars[,2])))
+
+#among the 1st 13 target variables, these are the most common high importance variables
+
+#Annual_Report_Subscriber__c.xTRUE
+#7
+#MP_Event_Host__cTRUE
+#7
+#Do_Not_Mail__cTRUE
+#6
+#DoNotCallTRUE
+#6
+#HasOptedOutOfEmailTRUE
+#6
+#Total_Events__c53
+#5
+
+#note that among the top 20 beta coefficients across the 1st thirteen target variables Annual_Report_Subscriber, MP_Event_Host, Do_Not_Mail, Do_Not_Call, and HasOptedOutofEmail are the most common important variables
+#this suggests that maximizing donor giving and engagement can be accomplished by getting donors to opt in to communications. Dedicating resources to improve the opt in rate should be a primary objective for RAH.
