@@ -1,7 +1,6 @@
 # TeradataUniversityNetworkDataChallenge2017
-Submitted as Data Analysis Project for Cal Poly SLO GSE544
 
-  Of all the projects I've done, the project completed for the MSBA's decision analysis (GSE544) course was by far my favorite. It was my first opportunity to perform every role in a full-lifecycle analytics project: data acquisition, cleaning and transformation, modeling, write up, and presentation. 
+  Of all the projects I've done, the project completed using Rise Against Hunger's Salesforce data was by far my favorite. It was my first opportunity to perform every role in a full-lifecycle analytics project: data acquisition, cleaning and transformation, modeling, write up, and presentation. 
 
   By performing every role myself, I finally learned the nuances of each stage of the process, struggled with the variety of potential solutions, and identified insights that were uniquely my own. That the data was by far the dirtiest and largest I've played with so far was a bonus.
 
