@@ -532,8 +532,6 @@ for (i in seq_along(Review)) {
 TopVars[,2] = as.character(TopVars[,2])
 #View(as.matrix(table(TopVars[,2])))
 
-#among the 1st 13 target variables, these are the most common high importance variables
-
 #Annual_Report_Subscriber__c.xTRUE
 #7
 #MP_Event_Host__cTRUE
@@ -546,6 +544,3 @@ TopVars[,2] = as.character(TopVars[,2])
 #6
 #Total_Events__c53
 #5
-
-#note that among the top 20 beta coefficients across the 1st thirteen target variables Annual_Report_Subscriber, MP_Event_Host, Do_Not_Mail, Do_Not_Call, and HasOptedOutofEmail are the most common important variables
-#this suggests that maximizing donor giving and engagement can be accomplished by getting donors to opt in to communications. Dedicating resources to improve the opt in rate should be a primary objective for RAH.
